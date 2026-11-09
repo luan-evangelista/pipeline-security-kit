@@ -1,0 +1,47 @@
+rules:
+  - id: pan-in-logs
+    message: >-
+      A value that looks like card data ('$VAR') is being logged. PCI DSS forbids
+      storing the full PAN unprotected and never allows CVV or PIN storage after
+      authorization (req. 3.3, 3.4). Log a masked value or an internal ID instead.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: "CWE-532: Insertion of Sensitive Information into Log File"
+      references:
+        - https://www.pcisecuritystandards.org/
+    patterns:
+      - pattern-either:
+          - pattern: console.$LOG(..., $VAR, ...)
+          - pattern: console.$LOG(..., <... $X.$VAR ...>, ...)
+          - pattern: $LOGGER.$LEVEL(..., $VAR, ...)
+          - pattern: $LOGGER.$LEVEL(..., <... $X.$VAR ...>, ...)
+      - metavariable-regex:
+          metavariable: $LEVEL
+          regex: ^(log|info|warn|error|debug|trace|fatal)$
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)^(pan|cardnumber|card_number|ccnumber|cvv|cvc|cvv2|securitycode|pin)$
+  - id: pan-in-logs-go
+    message: >-
+      A value that looks like card data ('$VAR') is being logged. Log a masked
+      value or an internal ID instead (PCI DSS req. 3.3, 3.4).
+    severity: ERROR
+    languages: [go]
+    metadata:
+      category: security
+      cwe: "CWE-532: Insertion of Sensitive Information into Log File"
+    patterns:
+      - pattern-either:
+          - pattern: $PKG.$FN(..., $VAR, ...)
+          - pattern: $PKG.$FN(..., $X.$VAR, ...)
+      - metavariable-regex:
+          metavariable: $PKG
+          regex: ^(log|slog|logger|fmt)$
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^(Print|Printf|Println|Info|Warn|Error|Debug|Fatal|Fatalf)$
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)^(pan|cardnumber|card_number|ccnumber|cvv|cvc|cvv2|securitycode|pin)$

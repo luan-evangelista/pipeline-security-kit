@@ -1,0 +1,24 @@
+# Copy to .github/workflows/security.yml in your repository.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 6 * * 1" # weekly re-scan for newly published CVEs
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    # Pin to a commit SHA of pipeline-security-kit, not to a branch.
+    uses: luan-evangelista/pipeline-security-kit/.github/workflows/security-scan.yml@main
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      semgrep-rulesets: "p/default p/typescript"
+      codeql-languages: '["javascript-typescript"]'
+      docker-context: .

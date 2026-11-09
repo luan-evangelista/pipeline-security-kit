@@ -1,0 +1,33 @@
+rules:
+  - id: sql-string-building-go
+    message: >-
+      SQL built with string formatting or concatenation. If any part comes from
+      user input this is SQL injection. Use placeholders: db.Query("... WHERE id = ?", id).
+    severity: ERROR
+    languages: [go]
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $DB.$METHOD(..., $QE, ...)
+              - metavariable-pattern:
+                  metavariable: $QE
+                  pattern-either:
+                    - pattern: fmt.Sprintf(...)
+                    - pattern: $A + $B
+          - patterns:
+              - pattern-inside: |
+                  $QUERY := fmt.Sprintf(...)
+                  ...
+              - pattern: $DB.$METHOD(..., $QUERY, ...)
+          - patterns:
+              - pattern-inside: |
+                  $QUERY := $A + $B
+                  ...
+              - pattern: $DB.$METHOD(..., $QUERY, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext|Prepare|PrepareContext)$
