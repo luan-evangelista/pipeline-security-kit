@@ -1,0 +1,25 @@
+name: Test rules
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep-rules:
+    name: Semgrep rule unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -m pip install --user semgrep==1.184.0
+      - name: Every rule must catch its bad examples and ignore its good ones
+        run: semgrep --test --metrics off --config rules/ tests/

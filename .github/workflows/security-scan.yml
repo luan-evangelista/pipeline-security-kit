@@ -1,0 +1,247 @@
+name: Security scan (reusable)
+
+# Call this workflow from any repository:
+#
+#   jobs:
+#     security:
+#       uses: luan-evangelista/pipeline-security-kit/.github/workflows/security-scan.yml@<commit-sha>
+#       with:
+#         codeql-languages: '["javascript-typescript"]'
+#         docker-context: .
+#       permissions:
+#         contents: read
+#         security-events: write
+#
+# Every input is optional. Layers without an input (CodeQL, container) are skipped.
+
+on:
+  workflow_call:
+    inputs:
+      semgrep-rulesets:
+        description: "Space-separated Semgrep registry rulesets, added to the kit's own rules."
+        type: string
+        default: "p/default"
+      codeql-languages:
+        description: 'JSON list of CodeQL languages, e.g. ["javascript-typescript","go"]. Empty list skips CodeQL.'
+        type: string
+        default: "[]"
+      docker-context:
+        description: "Build context of a Dockerfile to build and scan. Empty skips the container layer."
+        type: string
+        default: ""
+      dockerfile:
+        description: "Path to the Dockerfile, relative to the repository root."
+        type: string
+        default: "Dockerfile"
+      fail-on:
+        description: "Severities that fail the build for dependencies and images."
+        type: string
+        default: "CRITICAL,HIGH"
+      kit-ref:
+        description: "Ref of pipeline-security-kit whose custom rules are used. Pin it to a commit SHA."
+        type: string
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secrets (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Gitleaks (checksum verified)
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar xzf gitleaks.tar.gz gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Scan full git history
+        run: gitleaks git --redact --verbose --report-format sarif --report-path gitleaks.sarif .
+      - name: Upload results
+        if: always()
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+
+  sast:
+    name: Code (Semgrep + kit rules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch kit rules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: luan-evangelista/pipeline-security-kit
+          ref: ${{ inputs.kit-ref }}
+          path: .security-kit
+          persist-credentials: false
+      - name: Install Semgrep
+        run: python3 -m pip install --user semgrep==1.184.0
+      - name: Scan
+        env:
+          RULESETS: ${{ inputs.semgrep-rulesets }}
+        run: |
+          args=(--config .security-kit/rules)
+          for r in $RULESETS; do args+=(--config "$r"); done
+          semgrep scan "${args[@]}" \
+            --exclude .security-kit \
+            --metrics off \
+            --sarif --output semgrep.sarif \
+            --severity ERROR --error
+      - name: Upload results
+        if: always()
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  codeql:
+    name: Code (CodeQL)
+    if: inputs.codeql-languages != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(inputs.codeql-languages) }}
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: codeql-${{ matrix.language }}
+
+  dependencies:
+    name: Dependencies and config (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan (report)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          skip-dirs: .security-kit
+          format: sarif
+          output: trivy-fs.sarif
+      - name: Upload results
+        if: always()
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+      - name: Scan (gate)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: ${{ inputs.fail-on }}
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
+
+  container:
+    name: Container image (Trivy + SBOM)
+    if: inputs.docker-context != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      IMAGE: security-scan:${{ github.sha }}
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ inputs.docker-context }}
+          file: ${{ inputs.dockerfile }}
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}
+      - name: Scan image (report)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: sarif
+          output: trivy-image.sarif
+      - name: Upload results
+        if: always()
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+      - name: Scan image (gate)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: ${{ inputs.fail-on }}
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.IMAGE }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 30
