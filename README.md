@@ -195,8 +195,21 @@ Every input is optional. Layers without their input (CodeQL, container) are skip
 | `dockerfile` | `Dockerfile` | Dockerfile path, relative to the repository root |
 | `fail-on` | `CRITICAL,HIGH` | Severities that fail the dependency, configuration and image gates |
 | `kit-ref` | `main` | Version of this kit's rules to use. Pin it to a commit SHA |
+| `upload-sarif` | `true` | Upload results to **Security → Code scanning**. Set `false` on private repositories without GitHub Code Security |
 
 The image is built locally on the runner for scanning only. It is never pushed to a registry.
+
+### Private repositories
+
+GitHub code scanning is free for public repositories. On private repositories it requires **GitHub Code Security**, and without it every SARIF upload fails with `Code scanning is not enabled for this repository`. Pass `upload-sarif: false` to skip the uploads:
+
+```yaml
+    with:
+      codeql-languages: '["javascript-typescript"]'
+      upload-sarif: false
+```
+
+All scans still run and the gates still block the build. Findings are shown only in the job logs instead of the Security tab.
 
 ---
 
